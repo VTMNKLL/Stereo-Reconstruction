@@ -85,7 +85,6 @@ def find_match(img1, img2):
 
 
 def getF8pt(u,v):
-
     # should check if u and v are the same size
     A = np.zeros((u.shape[0],9))
     for ii in range( u.shape[0] ):
@@ -128,9 +127,8 @@ def chooseNPoints(x1, x2, n):
     return p1, p2
 
 
-def compute_F(pts1, pts2, M = 2000):
-    # TO DO
-
+def compute_F(pts1, pts2):
+    M = 2000 # ransac iterations
     n = 0; # max inliers
     F = np.zeros( ( 3, 3 ) )
     for ii in range(M):
@@ -165,7 +163,6 @@ def skewPix(x):
                      [-x[1], x[0], 0]])
 
 def triangulation(P1, P2, pts1, pts2):
-    # TO DO
     pts3D = np.zeros((pts1.shape[0], 4))
 
     A = np.zeros((6,4))
@@ -181,8 +178,6 @@ def triangulation(P1, P2, pts1, pts2):
     return pts3D
 
 def disambiguate_pose(Rs, Cs, pts3Ds):
-    # TO DO
-    
     bestValidIdx = -1
     bestValid = 0
     
@@ -209,7 +204,6 @@ def disambiguate_pose(Rs, Cs, pts3Ds):
 
 
 def compute_rectification(K, R, C):
-    # TO DO
     rx = np.squeeze( C )
     rx /= np.linalg.norm( rx )
     rz_hat = R[2,:]
@@ -226,55 +220,85 @@ def compute_rectification(K, R, C):
 
 
 def dense_match(img1, img2):
-    # TO DO
-    disparity = np.zeros((img1.shape[0],img1.shape[1]), dtype = float)
+    size = 3
+    #cv2.imshow('Left',img1)
+    #cv2.imshow('Right',img2)
+    #cv2.waitKey()
 
-    grid = np.indices( ( img1.shape[1], img1.shape[0] ) )
+    disparity = np.zeros(img1.shape, dtype = int)
+
+    #grid = np.indices( ( img1.shape[0], img1.shape[1] ) )
 
     #keyPoints = [ [ cv2.KeyPoint() ] * img1.shape[1] ] * img1.shape[0]
     #keyPoints = np.empty( img1.shape, dtype = type(cv2.KeyPoint) )
 
-    size = 15
-
     print('Building keypoints...')
-    v = np.vectorize( lambda a,b: cv2.KeyPoint(a,b,size) )
-    keyPoints = v( grid[1], grid[0] ).flatten().tolist()
+    #v = np.vectorize( lambda a,b: cv2.KeyPoint(a,b,size) )
+    #keyPoints = v( grid[1], grid[0] ).flatten().tolist()
+
+    keyPoints = [cv2.KeyPoint()] * img1.shape[0] * img2.shape[1]
+    length = len(keyPoints)
+    for y in range(img1.shape[0]):
+        for x in range(img1.shape[1]):
+            keyPoints[y * img1.shape[1] + x] = cv2.KeyPoint(x,y,size)
+
+
     print( 'number of keypoints: ' + str(len(keyPoints)) )
     
     print('calculating sift features...')
     sift = cv2.xfeatures2d.SIFT_create()
-    kp1, dense_feature1 = sift.compute(img1, keyPoints)
-    kp2, dense_feature2 = sift.compute(img2, keyPoints)
+    kp1, des1 = sift.compute(img1, keyPoints)
+    kp2, des2 = sift.compute(img2, keyPoints)
 
-    #print('drawing keypoints...')
-    #siftImg1 = cv2.drawKeypoints(img1,kp1,img1,flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    #siftImg2 = cv2.drawKeypoints(img2,kp2,img2,flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    #cv2.imshow('1',siftImg1)
-    #cv2.imshow('2',siftImg2)
-    #cv2.waitKey()
-    
+    testPoint = kp1[28 * img1.shape[1] + 57]
+    maxDisparity = 100
+
+
     for y in range( img1.shape[0] ):
         print('line ' + str(y))
-        for x in range( img1.shape[1] ):
+        
+        # fit a knn classifier to the row
 
-            df1 = dense_feature1[y * img1.shape[1] + x]
+        for xL in range( img1.shape[1] ):
+            if img1[y,xL] == 0:
+                continue
+            row = y * img1.shape[1]
+            offset1 = row + xL
+            df1 = des1[offset1]
+            kpA = kp1[offset1]
             bestMatchX = -1
             bestMatchDiff = float("inf")
 
-            for x2 in range( img1.shape[1]-x ):
-                df2 = dense_feature2[y * img1.shape[1] + x2 + x]
-                diff = df2 - df1
-                dist = np.linalg.norm( diff )
 
-                if dist < bestMatchDiff:
-                    bestMatchDiff = dist
-                    bestMatchX = x2 + x
+            stopOffset = xL
+            startOffset = max(xL-maxDisparity, 0)
+
+            start = y * img1.shape[1] + startOffset
+            stop  = y * img1.shape[1] + stopOffset + 1
+
+
+            nbrs = NearestNeighbors(n_neighbors = 1).fit(des2[start : stop ])
+            
+            # for each point in the second image, which is closest in the first
+            _, ind = nbrs.kneighbors([df1])
+
+            #for xR in range( min(xL,maxDisparity) + 1 ):#x + 1 ):
+            #    offset2 = row + xL - xR #- x2 + x
+            #    df2 = des2[offset2]
+            #    kpB = kp2[offset2]
+            #    diff = df2 - df1
+            #    dist = diff @ diff
+
+            #    if dist < bestMatchDiff:
+            #        bestMatchDiff = dist
+            #        bestMatchX = xR #abs(xR-xL)
                     
-            disp = img1.shape[1]
-            if bestMatchX != -1:
-                disp = abs(bestMatchX - x)
+            #disp = img1.shape[1]
+            #if bestMatchX != -1:
+            #    disp = bestMatchX
+            disp = abs(xL - ind[0,0] - startOffset )
 
-            disparity[y,x] = disp
+            disparity[y,xL] = disp
 
     return disparity
 
@@ -432,28 +456,33 @@ def visualize_disparity_map(disparity):
     plt.imshow(disparity, cmap='jet')
     plt.show()
 
+#def visualize_disparity_map(disparity, img):
+#    plt.imshow(disparity, cmap='jet')
+#    plt.imshow(img, alpha = .5)
+#    plt.show()
 
 if __name__ == '__main__':
+    #if False:
     # read in left and right images as RGB images
     img_left = cv2.imread('./left.bmp', 1)
     img_right = cv2.imread('./right.bmp', 1)
-    #visualize_img_pair(img_left, img_right)
+    visualize_img_pair(img_left, img_right)
 
     # Step 1: find correspondences between image pair
     pts1, pts2 = find_match(img_left, img_right)
     #randoms = np.random.choice(pts1.shape[0], pts1.shape[0]//6, replace=False)
     #pts1 = pts1[randoms]
     #pts2 = pts2[randoms]
-    #visualize_find_match(img_left, img_right, pts1, pts2)
+    visualize_find_match(img_left, img_right, pts1, pts2)
 
     # Step 2: compute fundamental matrix
     F = compute_F(pts1, pts2)
-    #visualize_epipolar_lines(F, pts1, pts2, img_left, img_right)
+    visualize_epipolar_lines(F, pts1, pts2, img_left, img_right)
 
     # Step 3: computes four sets of camera poses
     K = np.array([[350, 0, 960/2], [0, 350, 540/2], [0, 0, 1]])
     Rs, Cs = compute_camera_pose(F, K)
-    #visualize_camera_poses(Rs, Cs)
+    visualize_camera_poses(Rs, Cs)
 
     # Step 4: triangulation
     pts3Ds = []
@@ -462,7 +491,7 @@ if __name__ == '__main__':
         P2 = K @ np.hstack((Rs[i], -Rs[i] @ Cs[i]))
         pts3D = triangulation(P1, P2, pts1, pts2)
         pts3Ds.append(pts3D)
-    #visualize_camera_poses_with_pts(Rs, Cs, pts3Ds)
+    visualize_camera_poses_with_pts(Rs, Cs, pts3Ds)
 
     # Step 5: disambiguate camera poses
     R, C, pts3D = disambiguate_pose(Rs, Cs, pts3Ds)
@@ -471,11 +500,18 @@ if __name__ == '__main__':
     H1, H2 = compute_rectification(K, R, C)
     img_left_w = cv2.warpPerspective(img_left, H1, (img_left.shape[1], img_left.shape[0]))
     img_right_w = cv2.warpPerspective(img_right, H2, (img_right.shape[1], img_right.shape[0]))
-    #visualize_img_pair(img_left_w, img_right_w)
+    visualize_img_pair(img_left_w, img_right_w)
 
     # Step 7: generate disparity map
-    img_left_w = cv2.resize(img_left_w, (int(img_left_w.shape[1] / 2), int(img_left_w.shape[0] / 2)))  # resize image for speed
-    img_right_w = cv2.resize(img_right_w, (int(img_right_w.shape[1] / 2), int(img_right_w.shape[0] / 2)))
+        #cv2.imwrite('leftrect.png',img_left_w)
+        #cv2.imwrite('rightrect.png',img_right_w)
+    #else:
+        #img_left_w = cv2.imread('leftrect.png')
+        #img_right_w = cv2.imread('rightrect.png')
+        
+    scale = 2
+    img_left_w = cv2.resize(img_left_w, (int(img_left_w.shape[1] / scale), int(img_left_w.shape[0] / scale)))  # resize image for speed
+    img_right_w = cv2.resize(img_right_w, (int(img_right_w.shape[1] / scale), int(img_right_w.shape[0] / scale)))
     img_left_w = cv2.cvtColor(img_left_w, cv2.COLOR_BGR2GRAY)  # convert to gray scale
     img_right_w = cv2.cvtColor(img_right_w, cv2.COLOR_BGR2GRAY)
     disparity = dense_match(img_left_w, img_right_w)
